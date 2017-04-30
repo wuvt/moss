@@ -57,7 +57,7 @@ type ServerInfo struct {
 
 func versionHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" && r.Method != "HEAD" {
-		http.Error(w, "Only GET is allowed", http.StatusNotImplemented)
+		http.Error(w, "Only GET is allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -159,7 +159,7 @@ func mainHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	default:
-		http.Error(w, "", http.StatusNotImplemented)
+		http.Error(w, "", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -294,7 +294,7 @@ func trackUploadHandler(w http.ResponseWriter, r *http.Request, params []string)
 		// Lock exists, refuse upload
 		lerr := &lockExistsError{uuid}
 		log.Println(lerr.Error())
-		http.Error(w, lerr.Error(), http.StatusLocked)
+		http.Error(w, lerr.Error(), http.StatusForbidden)
 		return
 	}
 
