@@ -56,6 +56,11 @@ type ServerInfo struct {
 }
 
 func versionHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" && r.Method != "HEAD" {
+		http.Error(w, "Only GET is allowed", http.StatusNotImplemented)
+		return
+	}
+
 	var stat syscall.Statfs_t
 	syscall.Statfs(config.LibraryPath, &stat)
 	freeSpace := stat.Bavail * uint64(stat.Bsize)
@@ -403,7 +408,7 @@ func getHandler(w http.ResponseWriter, r *http.Request, params []string) {
 	uuidDir := uuidToPath(config.LibraryPath, params[0])
 	if !dirExists(uuidDir) {
 		http.Error(w, "holding not found on disk", http.StatusNotFound)
-		log.Println("holding not found: " + params[0])
+		log.Println("Holding not found: " + params[0])
 		return
 	}
 
@@ -449,7 +454,7 @@ func main() {
 		config.Port = *port
 		config.LibraryPath = *libpath
 
-		// There's no easy way to configure this on the CLI
+		// Config file is required for configurable shards
 		config.Shards = []Shard{Shard{"00000000-0000-0000-0000-000000000000", "ffffffff-ffff-ffff-ffff-ffffffffffff", true}}
 	}
 	log.Println("Server running on port " + strconv.Itoa(config.Port))
