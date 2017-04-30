@@ -1,0 +1,13 @@
+{
+    "ApiUser": "admin",
+    "ApiKey": "hunter2",
+    "Port": 8080,
+    "Shards": [
+        {
+            "MinUUID": "00000000-0000-0000-0000-000000000000",
+            "MaxUUID": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+            "Writable": true
+        }
+    ],
+    "LibraryPath": "/tmp/library"
+}
