@@ -1,0 +1,12 @@
+[Unit]
+Description=Music Object Storage Service
+After=network.target
+
+[Service]
+Type=simple
+PIDFile=/tmp/moss.pidfile
+ExecStart=/opt/moss/moss -config /opt/moss/config.json
+User=moss
+
+[Install]
+WantedBy=multi-user.target
