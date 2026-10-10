@@ -115,12 +115,6 @@ func mainHandler(w http.ResponseWriter, r *http.Request) {
 	uuid := params[0]
 
 	switch r.Method {
-	case "GET":
-		getHandler(w, r, params)
-		return
-	case "HEAD":
-		getHandler(w, r, params)
-		return
 	case "PUT":
 		if !checkAuth(w, r) {
 			return
@@ -330,11 +324,6 @@ type Holding struct {
 
 func listUUIDHandler(w http.ResponseWriter, r *http.Request) {
 	uuid := strings.ToLower(r.PathValue("uuid"))
-	// go handles '//' in a url weirdly. In this case, it treats it as an empty uuid
-	if len(uuid) == 0 {
-		listAllHandler(w, r)
-		return
-	}
 
 	err := uuidSanityCheck(uuid)
 	if err != nil {
@@ -387,22 +376,26 @@ func listUUIDHandler(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
-func getHandler(w http.ResponseWriter, r *http.Request, params []string) {
-	err := uuidSanityCheck(params[0])
+func getHandler(w http.ResponseWriter, r *http.Request) {
+	uuid := strings.ToLower(r.PathValue("uuid"))
+	option := r.PathValue("option")
+	file_path := r.PathValue("file_path")
+
+	err := uuidSanityCheck(uuid)
 	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	uuidDir := uuidToPath(config.LibraryPath, params[0])
+	uuidDir := uuidToPath(config.LibraryPath, uuid)
 	if !dirExists(uuidDir) {
 		http.Error(w, "holding not found on disk", http.StatusNotFound)
-		log.Println("Holding not found: " + params[0])
+		log.Println("Holding not found: " + uuid)
 		return
 	}
 
-	if params[1] == "albumart" {
+	if option == "albumart" {
 		fp := path.Join(uuidDir, "albumart")
 		if err := ensureSafePath(config.LibraryPath, fp); err != nil {
 			log.Println(err.Error())
@@ -412,9 +405,9 @@ func getHandler(w http.ResponseWriter, r *http.Request, params []string) {
 		http.ServeFile(w, r, fp)
 		return
 
-	} else if params[1] == "music" && len(params) >= 3 && len(params[2]) > 0 {
+	} else if option == "music" && len(file_path) > 0 {
 		fs := http.FileServer(http.Dir(path.Join(uuidDir, "music")))
-		sp := http.StripPrefix("/"+params[0]+"/music", fs)
+		sp := http.StripPrefix("/"+uuid+"/music", fs)
 		sp.ServeHTTP(w, r)
 		return
 
@@ -463,6 +456,8 @@ func main() {
 	mux.HandleFunc("/", mainHandler)
 	mux.HandleFunc("/{$}", listAllHandler)
 
+	// 'GET' also handles the HEAD method
 	mux.HandleFunc("GET /{uuid}/{$}", listUUIDHandler)
+	mux.HandleFunc("GET /{uuid}/{option}/{file_path...}", getHandler)
 	http.ListenAndServe(":"+strconv.Itoa(config.Port), mux)
 }
