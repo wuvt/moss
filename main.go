@@ -448,11 +448,19 @@ func main() {
 		if err != nil {
 			log.Fatal("Invalid config file")
 		}
+		config.LibraryPath, err = filepath.Abs(config.LibraryPath)
+		if err != nil {
+			log.Fatal(err.Error())
+		}
 	} else {
 		config.ApiUser = *apiuser
 		config.ApiKey = *apikey
 		config.Port = *port
-		config.LibraryPath = *libpath
+		abs, err := filepath.Abs(*libpath)
+		if err != nil {
+			log.Fatal(err.Error())
+		}
+		config.LibraryPath = abs
 
 		// Config file is required for configurable shards
 		config.Shards = []Shard{Shard{"00000000-0000-0000-0000-000000000000", "ffffffff-ffff-ffff-ffff-ffffffffffff", true}}
