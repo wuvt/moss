@@ -116,13 +116,8 @@ func mainHandler(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case "GET":
-		if len(params) == 1 || (len(params) == 2 && params[1] == "") {
-			listUUIDHandler(w, r, params)
-			return
-		} else {
-			getHandler(w, r, params)
-			return
-		}
+		getHandler(w, r, params)
+		return
 	case "HEAD":
 		getHandler(w, r, params)
 		return
@@ -333,18 +328,25 @@ type Holding struct {
 	Locked     bool
 }
 
-func listUUIDHandler(w http.ResponseWriter, r *http.Request, params []string) {
-	err := uuidSanityCheck(params[0])
+func listUUIDHandler(w http.ResponseWriter, r *http.Request) {
+	uuid := strings.ToLower(r.PathValue("uuid"))
+	// go handles '//' in a url weirdly. In this case, it treats it as an empty uuid
+	if len(uuid) == 0 {
+		listAllHandler(w, r)
+		return
+	}
+
+	err := uuidSanityCheck(uuid)
 	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	uuidDir := uuidToPath(config.LibraryPath, params[0])
+	uuidDir := uuidToPath(config.LibraryPath, uuid)
 	if !dirExists(uuidDir) {
 		http.Error(w, "holding not found on disk", http.StatusNotFound)
-		log.Println("Holding not found: " + params[0])
+		log.Println("Holding not found: " + uuid)
 		return
 	}
 
@@ -460,5 +462,7 @@ func main() {
 	mux.HandleFunc("/favicon.ico", http.NotFound)
 	mux.HandleFunc("/", mainHandler)
 	mux.HandleFunc("/{$}", listAllHandler)
+
+	mux.HandleFunc("GET /{uuid}/{$}", listUUIDHandler)
 	http.ListenAndServe(":"+strconv.Itoa(config.Port), mux)
 }
