@@ -25,6 +25,12 @@ var configPath = flag.String("config", "", "Path to JSON config file")
 
 var config Config
 
+func httpErrorHandler(msg string, code int) func(http.ResponseWriter, *http.Request) {
+	return func (w http.ResponseWriter, r *http.Request) {
+		http.Error(w, msg, code)
+	}
+}
+
 func checkAuth(w http.ResponseWriter, r *http.Request) bool {
 	user, pass, ok := r.BasicAuth()
 	if !ok || subtle.ConstantTimeCompare([]byte(user), []byte(config.ApiUser)) != 1 || subtle.ConstantTimeCompare([]byte(pass), []byte(config.ApiKey)) != 1 {
@@ -56,11 +62,6 @@ type ServerInfo struct {
 }
 
 func versionHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" && r.Method != "HEAD" {
-		http.Error(w, "Only GET is allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var stat syscall.Statfs_t
 	syscall.Statfs(config.LibraryPath, &stat)
 	freeSpace := stat.Bavail * uint64(stat.Bsize)
@@ -107,39 +108,6 @@ func listAllHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(js)
-}
-
-func mainHandler(w http.ResponseWriter, r *http.Request) {
-	params := strings.Split(r.URL.Path[len("/"):], "/")
-	params[0] = strings.ToLower(params[0])
-	uuid := params[0]
-
-	switch r.Method {
-	case "PUT":
-		if !checkAuth(w, r) {
-			return
-		}
-		if len(params) < 2 {
-			http.Error(w, "Insufficient parameters", http.StatusBadRequest)
-			return
-		} else if params[1] == "lock" {
-			lockCreationHandler(w, r, uuid)
-			return
-		} else if params[1] == "music" {
-			trackUploadHandler(w, r, params)
-			return
-		} else if params[1] == "albumart" {
-			albumArtUploadHandler(w, r, uuid)
-			return
-		} else {
-			http.Error(w, "No request handler for that", http.StatusBadRequest)
-			return
-		}
-	default:
-		http.Error(w, "", http.StatusMethodNotAllowed)
-		return
-	}
-
 }
 
 type uuidError struct {
@@ -257,8 +225,7 @@ func (e *lockExistsError) Error() string {
 	return fmt.Sprintf("Lock exists for %s", e.uuid)
 }
 
-func trackUploadHandler(w http.ResponseWriter, r *http.Request, params []string) {
-	uuid := params[0]
+func trackUploadHandler(w http.ResponseWriter, r *http.Request, uuid, file_path string) {
 	err := uuidSanityCheck(uuid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -282,7 +249,7 @@ func trackUploadHandler(w http.ResponseWriter, r *http.Request, params []string)
 		return
 	}
 
-	destPath := path.Join(uuidToPath(config.LibraryPath, uuid), "music", strings.Join(params[2:], "/"))
+	destPath := path.Join(uuidToPath(config.LibraryPath, uuid), "music", file_path)
 
 	if err := ensureSafePath(config.LibraryPath, destPath); err != nil {
 		log.Println(err.Error())
@@ -418,6 +385,30 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func putHandler(w http.ResponseWriter, r *http.Request) {
+	uuid := strings.ToLower(r.PathValue("uuid"))
+	option := r.PathValue("option")
+	file_path := r.PathValue("file_path")
+
+	if !checkAuth(w, r) {
+		return
+	}
+
+	if option == "lock" {
+		lockCreationHandler(w, r, uuid)
+		return
+	} else if option == "music" {
+		trackUploadHandler(w, r, uuid, file_path)
+		return
+	} else if option == "albumart" {
+		albumArtUploadHandler(w, r, uuid)
+		return
+	} else {
+		http.Error(w, "No request handler for that", http.StatusBadRequest)
+		return
+	}
+}
+
 func main() {
 	flag.Parse()
 	if *configPath != "" {
@@ -451,13 +442,16 @@ func main() {
 	log.Println("Server running on port " + strconv.Itoa(config.Port))
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/version", versionHandler)
-	mux.HandleFunc("/favicon.ico", http.NotFound)
-	mux.HandleFunc("/", mainHandler)
+	mux.HandleFunc("/", httpErrorHandler("", http.StatusMethodNotAllowed))
 	mux.HandleFunc("/{$}", listAllHandler)
 
 	// 'GET' also handles the HEAD method
+	mux.HandleFunc("GET /version", versionHandler)
+	mux.HandleFunc("GET /favicon.ico", http.NotFound)
 	mux.HandleFunc("GET /{uuid}/{$}", listUUIDHandler)
 	mux.HandleFunc("GET /{uuid}/{option}/{file_path...}", getHandler)
+
+	mux.HandleFunc("PUT /{_}", httpErrorHandler("Insufficient parameters", http.StatusBadRequest))
+	mux.HandleFunc("PUT /{uuid}/{option}/{file_path...}", putHandler)
 	http.ListenAndServe(":"+strconv.Itoa(config.Port), mux)
 }
