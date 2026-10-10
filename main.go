@@ -111,19 +111,7 @@ func listAllHandler(w http.ResponseWriter, r *http.Request) {
 
 func mainHandler(w http.ResponseWriter, r *http.Request) {
 	params := strings.Split(r.URL.Path[len("/"):], "/")
-	if len(params) == 0 || len(params[0]) == 0 {
-		listAllHandler(w, r)
-		return
-	}
 	params[0] = strings.ToLower(params[0])
-
-	// Just to cut down on log spam
-	if params[0] == "favicon.ico" {
-		http.Error(w, "", http.StatusNotFound)
-		return
-	}
-
-	// At this point we assume that params[0] is a UUID
 	uuid := params[0]
 
 	switch r.Method {
@@ -469,6 +457,8 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/version", versionHandler)
+	mux.HandleFunc("/favicon.ico", http.NotFound)
 	mux.HandleFunc("/", mainHandler)
+	mux.HandleFunc("/{$}", listAllHandler)
 	http.ListenAndServe(":"+strconv.Itoa(config.Port), mux)
 }
