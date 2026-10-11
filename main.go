@@ -229,7 +229,10 @@ func (e *lockExistsError) Error() string {
 	return fmt.Sprintf("Lock exists for %s", e.uuid)
 }
 
-func trackUploadHandler(w http.ResponseWriter, r *http.Request, uuid, file_path string) {
+func trackUploadHandler(w http.ResponseWriter, r *http.Request) {
+	uuid := strings.ToLower(r.PathValue("uuid"))
+	file_path := r.PathValue("file_path")
+
 	err := uuidSanityCheck(uuid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -389,20 +392,6 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func putHandler(w http.ResponseWriter, r *http.Request) {
-	uuid := strings.ToLower(r.PathValue("uuid"))
-	option := r.PathValue("option")
-	file_path := r.PathValue("file_path")
-
-	if option == "music" {
-		trackUploadHandler(w, r, uuid, file_path)
-		return
-	} else {
-		http.Error(w, "No request handler for that", http.StatusBadRequest)
-		return
-	}
-}
-
 func main() {
 	flag.Parse()
 	if *configPath != "" {
@@ -440,14 +429,15 @@ func main() {
 	mux.HandleFunc("/{$}", listAllHandler)
 
 	// 'GET' also handles the HEAD method
-	mux.HandleFunc("GET /version", versionHandler)
+	mux.HandleFunc("GET /version/{$}", versionHandler)
 	mux.HandleFunc("GET /favicon.ico", http.NotFound)
 	mux.HandleFunc("GET /{uuid}/{$}", listUUIDHandler)
 	mux.HandleFunc("GET /{uuid}/{option}/{file_path...}", getHandler)
 
-	mux.HandleFunc("PUT /{_}", httpErrorHandler("Insufficient parameters", http.StatusBadRequest))
-	mux.HandleFunc("PUT /{uuid}/{option}/{file_path...}", checkAuth(putHandler))
-	mux.HandleFunc("PUT /{uuid}/lock", checkAuth(lockCreationHandler))
-	mux.HandleFunc("PUT /{uuid}/albumart", checkAuth(albumArtUploadHandler))
+	mux.HandleFunc("PUT /{_}/{$}", httpErrorHandler("Insufficient parameters", http.StatusBadRequest))
+	mux.HandleFunc("PUT /{uuid}/{_}/", checkAuth(httpErrorHandler("No request handler for that", http.StatusBadRequest)))
+	mux.HandleFunc("PUT /{uuid}/lock/", checkAuth(lockCreationHandler))
+	mux.HandleFunc("PUT /{uuid}/albumart/", checkAuth(albumArtUploadHandler))
+	mux.HandleFunc("PUT /{uuid}/music/{file_path...}", checkAuth(trackUploadHandler))
 	http.ListenAndServe(":"+strconv.Itoa(config.Port), mux)
 }
