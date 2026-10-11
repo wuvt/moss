@@ -230,14 +230,6 @@ func ensureSafePath(basepath string, targetpath string) error {
 	return nil
 }
 
-type lockExistsError struct {
-	uuid string
-}
-
-func (e *lockExistsError) Error() string {
-	return fmt.Sprintf("Lock exists for %s", e.uuid)
-}
-
 func trackUploadHandler(w http.ResponseWriter, r *http.Request) {
 	uuid := strings.ToLower(r.PathValue("uuid"))
 	file_path := r.PathValue("file_path")
@@ -245,9 +237,9 @@ func trackUploadHandler(w http.ResponseWriter, r *http.Request) {
 	lockPath := path.Join(uuidToPath(config.LibraryPath, uuid), "lock")
 	if _, err := os.Stat(lockPath); err == nil {
 		// Lock exists, refuse upload
-		lerr := &lockExistsError{uuid}
-		log.Println(lerr.Error())
-		http.Error(w, lerr.Error(), http.StatusForbidden)
+		lerr_str := "Lock exists for " + uuid
+		log.Println(lerr_str)
+		http.Error(w, lerr_str, http.StatusForbidden)
 		return
 	}
 
@@ -344,23 +336,19 @@ func albumArtDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, fp)
 }
 
-func getHandler(w http.ResponseWriter, r *http.Request) {
+func trackDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	uuid := strings.ToLower(r.PathValue("uuid"))
-	option := r.PathValue("option")
 	file_path := r.PathValue("file_path")
 	uuidDir := uuidToPath(config.LibraryPath, uuid)
 
-	if option == "music" && len(file_path) > 0 {
-		fs := http.FileServer(http.Dir(path.Join(uuidDir, "music")))
-		sp := http.StripPrefix("/"+uuid+"/music", fs)
-		sp.ServeHTTP(w, r)
-		return
-
-	} else {
+	if len(file_path) == 0 {
 		http.Error(w, "invalid url", http.StatusBadRequest)
 		return
-
 	}
+
+	fs := http.FileServer(http.Dir(path.Join(uuidDir, "music")))
+	sp := http.StripPrefix("/"+uuid+"/music", fs)
+	sp.ServeHTTP(w, r)
 }
 
 func main() {
@@ -393,28 +381,45 @@ func main() {
 		// Config file is required for configurable shards
 		config.Shards = []Shard{Shard{"00000000-0000-0000-0000-000000000000", "ffffffff-ffff-ffff-ffff-ffffffffffff", true}}
 	}
-	log.Println("Server running on port " + strconv.Itoa(config.Port))
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", httpErrorHandler("", http.StatusMethodNotAllowed))
-	mux.HandleFunc("/{$}", listAllHandler)
 
 	// 'GET' also handles the HEAD method
-	mux.HandleFunc("GET /version/{$}", versionHandler)
-	mux.HandleFunc("GET /favicon.ico", http.NotFound)
-	mux.HandleFunc("GET /{uuid}/{$}", checkUUID(checkUUIDDir(listUUIDHandler)))
-	mux.HandleFunc("GET /{uuid}/{option}/{file_path...}", checkUUID(checkUUIDDir(getHandler)))
-	mux.HandleFunc("GET /{uuid}/albumart/",
-		checkUUID(checkUUIDDir(albumArtDownloadHandler)))
-
-	mux.HandleFunc("PUT /{_}/{$}",
-		httpErrorHandler("Insufficient parameters", http.StatusBadRequest))
-	mux.HandleFunc("PUT /{uuid}/{_}/",
-		checkAuth(httpErrorHandler("No request handler for that", http.StatusBadRequest)))
-	mux.HandleFunc("PUT /{uuid}/lock/",
-		checkAuth(checkUUID(checkUUIDDir(lockCreationHandler))))
+	// API
+	mux.HandleFunc("PUT /{uuid}/music/{file_path...}",
+		checkAuth(checkUUID(trackUploadHandler)),
+	)
+	mux.HandleFunc("GET /{uuid}/music/{file_path...}",
+		checkUUID(checkUUIDDir(trackDownloadHandler)),
+	)
 	mux.HandleFunc("PUT /{uuid}/albumart/",
-		checkAuth(checkUUID(checkUUIDDir(albumArtUploadHandler))))
-	mux.HandleFunc("PUT /{uuid}/music/{file_path...}", checkAuth(checkUUID(trackUploadHandler)))
+		checkAuth(checkUUID(checkUUIDDir(albumArtUploadHandler))),
+	)
+	mux.HandleFunc("GET /{uuid}/albumart/",
+		checkUUID(checkUUIDDir(albumArtDownloadHandler)),
+	)
+	mux.HandleFunc("GET /{uuid}/{$}",
+		checkUUID(checkUUIDDir(listUUIDHandler)),
+	)
+	mux.HandleFunc("PUT /{uuid}/lock/",
+		checkAuth(checkUUID(checkUUIDDir(lockCreationHandler))),
+	)
+	mux.HandleFunc("GET /{$}", listAllHandler)
+	mux.HandleFunc("GET /version/{$}", versionHandler)
+
+	// Bad
+	mux.HandleFunc("/", httpErrorHandler("", http.StatusMethodNotAllowed))
+	mux.HandleFunc("GET /favicon.ico", http.NotFound)
+	mux.HandleFunc("PUT /{_}/{$}",
+		httpErrorHandler("Insufficient parameters", http.StatusBadRequest),
+	)
+	mux.HandleFunc("PUT /{uuid}/{_}/",
+		checkAuth(httpErrorHandler("No request handler for that", http.StatusBadRequest)),
+	)
+	mux.HandleFunc("GET /{uuid}/{_}/",
+		checkUUID(checkUUIDDir(httpErrorHandler("invalid url", http.StatusBadRequest))),
+	)
+
+	log.Println("Server running on port " + strconv.Itoa(config.Port))
 	http.ListenAndServe(":"+strconv.Itoa(config.Port), mux)
 }
