@@ -25,20 +25,22 @@ var configPath = flag.String("config", "", "Path to JSON config file")
 
 var config Config
 
-func httpErrorHandler(msg string, code int) func(http.ResponseWriter, *http.Request) {
+func httpErrorHandler(msg string, code int) http.HandlerFunc {
 	return func (w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, code)
 	}
 }
 
-func checkAuth(w http.ResponseWriter, r *http.Request) bool {
-	user, pass, ok := r.BasicAuth()
-	if !ok || subtle.ConstantTimeCompare([]byte(user), []byte(config.ApiUser)) != 1 || subtle.ConstantTimeCompare([]byte(pass), []byte(config.ApiKey)) != 1 {
-		http.Error(w, "API key is incorrect", http.StatusUnauthorized)
-		log.Println("Authentication failure for " + user)
-		return false
+func checkAuth(handler http.HandlerFunc) http.HandlerFunc {
+	return func (w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || subtle.ConstantTimeCompare([]byte(user), []byte(config.ApiUser)) != 1 || subtle.ConstantTimeCompare([]byte(pass), []byte(config.ApiKey)) != 1 {
+			http.Error(w, "API key is incorrect", http.StatusUnauthorized)
+			log.Println("Authentication failure for " + user)
+			return
+		}
+		handler(w, r)
 	}
-	return true
 }
 
 type Shard struct {
@@ -130,10 +132,11 @@ func uuidSanityCheck(uuid string) error {
 	return nil
 }
 
-func lockCreationHandler(w http.ResponseWriter, r *http.Request, uuid string) {
+func lockCreationHandler(w http.ResponseWriter, r *http.Request) {
 	// Handle locking a UUID once all audio files are added. You can still add
 	// album art after the fact. Locks must be removed manually as holdings are
 	// supposed to be immutable once they are added.
+	uuid := strings.ToLower(r.PathValue("uuid"))
 	err := uuidSanityCheck(uuid)
 	if err != nil {
 		log.Println(err.Error())
@@ -390,14 +393,7 @@ func putHandler(w http.ResponseWriter, r *http.Request) {
 	option := r.PathValue("option")
 	file_path := r.PathValue("file_path")
 
-	if !checkAuth(w, r) {
-		return
-	}
-
-	if option == "lock" {
-		lockCreationHandler(w, r, uuid)
-		return
-	} else if option == "music" {
+	if option == "music" {
 		trackUploadHandler(w, r, uuid, file_path)
 		return
 	} else if option == "albumart" {
@@ -452,6 +448,7 @@ func main() {
 	mux.HandleFunc("GET /{uuid}/{option}/{file_path...}", getHandler)
 
 	mux.HandleFunc("PUT /{_}", httpErrorHandler("Insufficient parameters", http.StatusBadRequest))
-	mux.HandleFunc("PUT /{uuid}/{option}/{file_path...}", putHandler)
+	mux.HandleFunc("PUT /{uuid}/{option}/{file_path...}", checkAuth(putHandler))
+	mux.HandleFunc("PUT /{uuid}/lock/{file_path...}", checkAuth(lockCreationHandler))
 	http.ListenAndServe(":"+strconv.Itoa(config.Port), mux)
 }
