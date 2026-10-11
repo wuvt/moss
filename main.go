@@ -167,7 +167,8 @@ func uuidToPath(basepath string, uuid string) string {
 	return str
 }
 
-func albumArtUploadHandler(w http.ResponseWriter, r *http.Request, uuid string) {
+func albumArtUploadHandler(w http.ResponseWriter, r *http.Request) {
+	uuid := strings.ToLower(r.PathValue("uuid"))
 	err := uuidSanityCheck(uuid)
 	if err != nil {
 		log.Println(err.Error())
@@ -396,9 +397,6 @@ func putHandler(w http.ResponseWriter, r *http.Request) {
 	if option == "music" {
 		trackUploadHandler(w, r, uuid, file_path)
 		return
-	} else if option == "albumart" {
-		albumArtUploadHandler(w, r, uuid)
-		return
 	} else {
 		http.Error(w, "No request handler for that", http.StatusBadRequest)
 		return
@@ -449,6 +447,7 @@ func main() {
 
 	mux.HandleFunc("PUT /{_}", httpErrorHandler("Insufficient parameters", http.StatusBadRequest))
 	mux.HandleFunc("PUT /{uuid}/{option}/{file_path...}", checkAuth(putHandler))
-	mux.HandleFunc("PUT /{uuid}/lock/{file_path...}", checkAuth(lockCreationHandler))
+	mux.HandleFunc("PUT /{uuid}/lock", checkAuth(lockCreationHandler))
+	mux.HandleFunc("PUT /{uuid}/albumart", checkAuth(albumArtUploadHandler))
 	http.ListenAndServe(":"+strconv.Itoa(config.Port), mux)
 }
