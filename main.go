@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -25,16 +26,53 @@ var configPath = flag.String("config", "", "Path to JSON config file")
 
 var config Config
 
+// Models
+type Shard struct {
+	MinUUID  string
+	MaxUUID  string
+	Writable bool
+}
+
+type Config struct {
+	Port        int
+	ApiUser     string
+	ApiKey      string
+	LibraryPath string
+	Shards      []Shard
+}
+
+type ServerInfo struct {
+	Version   string
+	FreeSpace uint64
+	Shards    []Shard
+}
+
+type Holding struct {
+	FileList   []string
+	HasArtwork bool
+	Locked     bool
+}
+
+// Utils
 func httpErrorHandler(msg string, code int) http.HandlerFunc {
 	return func (w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, code)
 	}
 }
 
+func uuidToPath(basepath string, uuid string) string {
+	shard := uuid[0:2]
+	str := path.Join(basepath, shard, uuid)
+	return str
+}
+
+// Checks
 func checkAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return func (w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
-		if !ok || subtle.ConstantTimeCompare([]byte(user), []byte(config.ApiUser)) != 1 || subtle.ConstantTimeCompare([]byte(pass), []byte(config.ApiKey)) != 1 {
+		if !ok ||
+		   subtle.ConstantTimeCompare([]byte(user), []byte(config.ApiUser)) != 1 ||
+		   subtle.ConstantTimeCompare([]byte(pass), []byte(config.ApiKey)) != 1 {
 			http.Error(w, "API key is incorrect", http.StatusUnauthorized)
 			log.Println("Authentication failure for " + user)
 			return
@@ -63,12 +101,6 @@ func checkUUID(handler http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func uuidToPath(basepath string, uuid string) string {
-	shard := uuid[0:2]
-	str := path.Join(basepath, shard, uuid)
-	return str
-}
-
 func checkUUIDDir(handler http.HandlerFunc) http.HandlerFunc {
 	return func (w http.ResponseWriter, r *http.Request) {
 		uuid := strings.ToLower(r.PathValue("uuid"))
@@ -89,26 +121,46 @@ func checkUUIDDir(handler http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-type Shard struct {
-	MinUUID  string
-	MaxUUID  string
-	Writable bool
+func checkPath(handler http.HandlerFunc) http.HandlerFunc {
+	return func (w http.ResponseWriter, r *http.Request) {
+		uuid := strings.ToLower(r.PathValue("uuid"))
+		uuidDir := uuidToPath(config.LibraryPath, uuid)
+		file_path := r.PathValue("file_path")
+		destPath := path.Join(uuidDir, "music", file_path)
+
+		abs, err := filepath.Abs(destPath)
+		if err != nil {
+			log.Println(err.Error())
+			http.Error(w, "Bad path: " + file_path, http.StatusUnauthorized)
+			return
+		}
+		if !strings.HasPrefix(abs, config.LibraryPath) {
+			err_str := destPath + " is outside of " + config.LibraryPath
+			log.Println(err_str)
+			http.Error(w, err_str, http.StatusUnauthorized)
+			return
+		}
+		handler(w,r)
+	}
 }
 
-type Config struct {
-	Port        int
-	ApiUser     string
-	ApiKey      string
-	LibraryPath string
-	Shards      []Shard
+func checkLock(handler http.HandlerFunc) http.HandlerFunc {
+	return func (w http.ResponseWriter, r *http.Request) {
+		uuid := strings.ToLower(r.PathValue("uuid"))
+		uuidDir := uuidToPath(config.LibraryPath, uuid)
+		lockPath := path.Join(uuidDir, "lock")
+		if _, err := os.Stat(lockPath); err == nil {
+			// Lock exists, refuse upload
+			lerr_str := "Lock exists for " + uuid
+			log.Println(lerr_str)
+			http.Error(w, lerr_str, http.StatusForbidden)
+			return
+		}
+		handler(w,r)
+	}
 }
 
-type ServerInfo struct {
-	Version   string
-	FreeSpace uint64
-	Shards    []Shard
-}
-
+// Handlers
 func versionHandler(w http.ResponseWriter, r *http.Request) {
 	var stat syscall.Statfs_t
 	syscall.Statfs(config.LibraryPath, &stat)
@@ -158,20 +210,13 @@ func listAllHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(js)
 }
 
-
 func lockCreationHandler(w http.ResponseWriter, r *http.Request) {
 	// Handle locking a UUID once all audio files are added. You can still add
 	// album art after the fact. Locks must be removed manually as holdings are
 	// supposed to be immutable once they are added.
 	uuid := strings.ToLower(r.PathValue("uuid"))
 	uuidDir := uuidToPath(config.LibraryPath, uuid)
-
 	destPath := path.Join(uuidDir, "lock")
-	if err := ensureSafePath(config.LibraryPath, destPath); err != nil {
-		log.Println(err.Error())
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
 
 	if _, err := os.OpenFile(destPath, os.O_RDONLY|os.O_CREATE, 0644); err != nil {
 		log.Println(err.Error())
@@ -185,13 +230,7 @@ func lockCreationHandler(w http.ResponseWriter, r *http.Request) {
 func albumArtUploadHandler(w http.ResponseWriter, r *http.Request) {
 	uuid := strings.ToLower(r.PathValue("uuid"))
 	uuidDir := uuidToPath(config.LibraryPath, uuid)
-
 	destPath := path.Join(uuidDir, "albumart")
-	if err := ensureSafePath(config.LibraryPath, destPath); err != nil {
-		log.Println(err.Error())
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
 
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
@@ -210,51 +249,16 @@ func albumArtUploadHandler(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
-type pathTraversalError struct {
-	basePath   string
-	targetPath string
-}
-
-func (e *pathTraversalError) Error() string {
-	return fmt.Sprintf("%s is outside of %s", e.targetPath, e.basePath)
-}
-
-func ensureSafePath(basepath string, targetpath string) error {
-	abs, err := filepath.Abs(targetpath)
-	if err != nil {
-		return err
-	}
-	if !strings.HasPrefix(abs, basepath) {
-		return &pathTraversalError{basepath, targetpath}
-	}
-	return nil
-}
-
 func trackUploadHandler(w http.ResponseWriter, r *http.Request) {
 	uuid := strings.ToLower(r.PathValue("uuid"))
+	uuidDir := uuidToPath(config.LibraryPath, uuid)
 	file_path := r.PathValue("file_path")
-
-	lockPath := path.Join(uuidToPath(config.LibraryPath, uuid), "lock")
-	if _, err := os.Stat(lockPath); err == nil {
-		// Lock exists, refuse upload
-		lerr_str := "Lock exists for " + uuid
-		log.Println(lerr_str)
-		http.Error(w, lerr_str, http.StatusForbidden)
-		return
-	}
+	destPath := path.Join(uuidDir, "music", file_path)
 
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	destPath := path.Join(uuidToPath(config.LibraryPath, uuid), "music", file_path)
-
-	if err := ensureSafePath(config.LibraryPath, destPath); err != nil {
-		log.Println(err.Error())
-		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
 
@@ -273,13 +277,6 @@ func trackUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintf(w, "uploaded: %d bytes\n", len(body))
 	return
-
-}
-
-type Holding struct {
-	FileList   []string
-	HasArtwork bool
-	Locked     bool
 }
 
 func listUUIDHandler(w http.ResponseWriter, r *http.Request) {
@@ -301,23 +298,29 @@ func listUUIDHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var hasArtwork bool
-	var hasLock bool
-
+	hasArtwork := true
 	if _, err = os.Stat(path.Join(uuidDir, "albumart")); err != nil {
 		hasArtwork = false
-	} else {
-		hasArtwork = true
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Println(err.Error())
+		}
 	}
 
+	hasLock := true
 	if _, err = os.Stat(path.Join(uuidDir, "lock")); err != nil {
 		hasLock = false
-	} else {
-		hasLock = true
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Println(err.Error())
+		}
 	}
 
 	holding := Holding{fileList, hasArtwork, hasLock}
 	js, err := json.Marshal(holding)
+	if err != nil {
+		log.Println(err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(js)
 	return
@@ -326,13 +329,7 @@ func listUUIDHandler(w http.ResponseWriter, r *http.Request) {
 func albumArtDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	uuid := strings.ToLower(r.PathValue("uuid"))
 	uuidDir := uuidToPath(config.LibraryPath, uuid)
-
 	fp := path.Join(uuidDir, "albumart")
-	if err := ensureSafePath(config.LibraryPath, fp); err != nil {
-		log.Println(err.Error())
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
 	http.ServeFile(w, r, fp)
 }
 
@@ -387,7 +384,7 @@ func main() {
 	// 'GET' also handles the HEAD method
 	// API
 	mux.HandleFunc("PUT /{uuid}/music/{file_path...}",
-		checkAuth(checkUUID(trackUploadHandler)),
+		checkAuth(checkUUID(checkLock(checkPath(trackUploadHandler)))),
 	)
 	mux.HandleFunc("GET /{uuid}/music/{file_path...}",
 		checkUUID(checkUUIDDir(trackDownloadHandler)),
